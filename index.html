@@ -3,94 +3,120 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sayaç Analiz Terminali</title>
+    <title>Sayaç Analiz Pro</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
-        body { background: #121212; color: #00ff00; font-family: monospace; text-align: center; }
-        .camera-container { position: relative; width: 100%; max-width: 500px; margin: auto; overflow: hidden; }
-        video { width: 100%; border: 2px solid #333; }
-        .overlay {
+        body { background: #121212; color: #00ff00; font-family: monospace; text-align: center; padding: 10px; }
+        .camera-wrapper { position: relative; display: inline-block; width: 100%; max-width: 480px; }
+        video { width: 100%; border: 2px solid #333; border-radius: 8px; }
+        /* Kırmızı Çerçeve */
+        .overlay-box {
             position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            width: 80%; height: 60px;
-            border: 2px solid #ff0000;
-            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
-            pointer-events: none;
+            width: 80%; height: 20%;
+            border: 3px solid #ff0000;
+            box-shadow: 0 0 0 100vw rgba(0, 0, 0, 0.7); /* Çerçeve dışını karart */
+            z-index: 10;
         }
-        canvas { display: block; margin: 10px auto; border: 1px solid #555; background: #000; }
-        button { padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; cursor: pointer; }
+        /* Kontrol Paneli */
+        .controls { background: #222; padding: 15px; margin-top: 10px; border-radius: 8px; }
+        input[type=range] { width: 100%; margin: 10px 0; }
+        canvas { border: 2px solid #00ff00; background: #fff; width: 80%; height: auto; margin-top: 10px; }
+        button { background: #28a745; color: white; padding: 15px 30px; border: none; font-size: 18px; border-radius: 5px; width: 100%; margin-top: 10px; }
     </style>
 </head>
 <body>
 
-    <h2>SAYAÇ OKUMA SİSTEMİ</h2>
-    
-    <div class="camera-container">
+    <h3>MANUEL AYARLI SAYAÇ OKUYUCU</h3>
+
+    <div class="camera-wrapper">
         <video id="video" autoplay playsinline></video>
-        <div class="overlay"></div>
+        <div class="overlay-box"></div>
     </div>
 
-    <br>
-    <button onclick="captureAndProcess()">FOTOĞRAF ÇEK VE ANALİZ ET</button>
-    
-    <p>Kırpılan Bölge (İşlenen):</p>
-    <canvas id="cropCanvas" width="400" height="100"></canvas>
-    
-    <div id="result" style="font-size: 24px; margin-top: 20px;">Sonuç Bekleniyor...</div>
+    <div class="controls">
+        <label>EŞİK AYARI (Görüntü Siyahsa Çevir): <span id="valDisplay">100</span></label>
+        <input type="range" id="thresholdSlider" min="0" max="255" value="100">
+        
+        <p>İşlenen Görüntü (Burayı Netle!):</p>
+        <canvas id="previewCanvas"></canvas>
+        
+        <button onclick="runOCR()">SAYIYI OKU</button>
+    </div>
+
+    <h1 id="result" style="color: yellow; margin-top: 20px;">---</h1>
 
     <script>
         const video = document.getElementById('video');
-        const canvas = document.getElementById('cropCanvas');
-        const resultDiv = document.getElementById('result');
+        const canvas = document.getElementById('previewCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const slider = document.getElementById('thresholdSlider');
+        const valDisplay = document.getElementById('valDisplay');
+        
+        // Kamerayı Başlat
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then(stream => {
+            video.srcObject = stream;
+            // Video başladığında sürekli görüntü işlemeyi tetikle
+            requestAnimationFrame(processLoop);
+        });
 
-        // Kamerayı başlat
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
-            .then(stream => { video.srcObject = stream; })
-            .catch(err => { alert("Kamera açılmadı: " + err); });
+        // Sürekli Döngü (Real-time Preview)
+        function processLoop() {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                // 1. Görüntüyü Kırp (Crop)
+                const vw = video.videoWidth;
+                const vh = video.videoHeight;
+                // Çerçevenin oranı (CSS'deki %80 ve %20 değerlerine göre)
+                const cropW = vw * 0.8;
+                const cropH = vh * 0.2;
+                const cropX = (vw - cropW) / 2;
+                const cropY = (vh - cropH) / 2;
 
-        async function captureAndProcess() {
-            const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            
-            // Video boyutlarını al
-            const vW = video.videoWidth;
-            const vH = video.videoHeight;
-            
-            // Çerçevenin konumunu oranla (Orta bölgeyi alıyoruz)
-            const cropW = vW * 0.8;
-            const cropH = vH * 0.2;
-            const startX = (vW - cropW) / 2;
-            const startY = (vH - cropH) / 2;
+                canvas.width = cropW;
+                canvas.height = cropH;
 
-            // Canvas'a çiz
-            ctx.drawImage(video, startX, startY, cropW, cropH, 0, 0, 400, 100);
+                // 2. Kırpılan alanı Canvas'a çiz
+                ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
-            // Görüntü İşleme: Siyah-Beyaz ve Keskinleştirme
-            let imgData = ctx.getImageData(0, 0, 400, 100);
-            let d = imgData.data;
-            for (let i = 0; i < d.length; i += 4) {
-                let r = d[i], g = d[i+1], b = d[i+2];
-                let gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                // Eşikleme (Threshold): Rakamlar koyu, zemin açık olmalı
-                let v = (gray > 100) ? 255 : 0; 
-                d[i] = d[i+1] = d[i+2] = v;
+                // 3. EŞİKLEME (Threshold) İşlemi
+                let frame = ctx.getImageData(0, 0, cropW, cropH);
+                let data = frame.data;
+                let thresh = parseInt(slider.value);
+
+                for (let i = 0; i < data.length; i += 4) {
+                    // Gri tonlama formülü
+                    let avg = (data[i] + data[i+1] + data[i+2]) / 3;
+                    
+                    // SLIDER MANTIĞI: Eğer piksel değerden koyuysa SİYAH yap, açıksa BEYAZ yap
+                    // Dijital ekranlar için bazen tersi gerekir, slider ile ayarlanır.
+                    let color = (avg < thresh) ? 0 : 255;
+                    
+                    data[i] = color;     // R
+                    data[i+1] = color;   // G
+                    data[i+2] = color;   // B
+                }
+                ctx.putImageData(frame, 0, 0);
             }
-            ctx.putImageData(imgData, 0, 0);
+            requestAnimationFrame(processLoop);
+        }
 
-            resultDiv.innerText = "OCR Başlıyor...";
+        // Slider değişince sayıyı güncelle
+        slider.oninput = function() { valDisplay.innerText = this.value; }
 
-            // Tesseract Çalıştır
-            try {
-                const worker = await Tesseract.createWorker('eng');
-                await worker.setParameters({
-                    tessedit_char_whitelist: '0123456789.',
-                    tessedit_pageseg_mode: '7'
-                });
-                const { data: { text } } = await worker.recognize(canvas);
-                resultDiv.innerText = "Okunan Değer: " + text.replace(/[^0-9.]/g, "");
-                await worker.terminate();
-            } catch (e) {
-                resultDiv.innerText = "Hata: " + e;
-            }
+        // OCR Başlat
+        async function runOCR() {
+            const resLabel = document.getElementById('result');
+            resLabel.innerText = "OKUNUYOR...";
+            
+            const worker = await Tesseract.createWorker('eng');
+            await worker.setParameters({
+                tessedit_char_whitelist: '0123456789.',
+                tessedit_pageseg_mode: '7' // Tek satır modu
+            });
+            
+            const { data: { text } } = await worker.recognize(canvas);
+            resLabel.innerText = text.replace(/[^0-9.]/g, "") || "HATA";
+            await worker.terminate();
         }
     </script>
 </body>
