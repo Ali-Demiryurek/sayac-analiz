@@ -1,63 +1,48 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-    <style>
-        .camera-container { position: relative; width: 640px; height: 480px; margin: auto; }
-        #video { width: 100%; height: 100%; background: #000; }
-        /* Okuma Çerçevesi */
-        .overlay {
-            position: absolute; top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            width: 400px; height: 100px;
-            border: 3px solid #00ff00;
-            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); /* Çerçeve dışını karart */
-            pointer-events: none;
-        }
-    </style>
-</head>
-<body>
-
-<div class="camera-container">
-    <video id="video" autoplay playsinline></video>
-    <div class="overlay"></div>
-</div>
-
-<button onclick="captureAndProcess()" style="display:block; margin:20px auto; padding:15px 30px; font-size:20px;">FOTOĞRAF ÇEK VE OKU</button>
-
-<canvas id="cropCanvas" width="400" height="100" style="display:none;"></canvas>
-<h2 id="result" style="text-align:center; color:#00ff00;">Sonuç: ---</h2>
-
-<script>
+async function captureAndProcess() {
     const video = document.getElementById('video');
-    const canvas = document.getElementById('cropCanvas');
+    const canvas = document.getElementById('cropCanvas'); // 400x100 boyutunda olsun
+    const ctx = canvas.getContext('2d');
 
-    // Kamerayı Başlat
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
-        .then(stream => video.srcObject = stream);
+    // 1. Dinamik Kırpma: Videonun tam ortasından çerçeve boyutunda bir alan al
+    const scaleX = video.videoWidth / video.clientWidth;
+    const scaleY = video.videoHeight / video.clientHeight;
+    
+    // Çerçevenin ekrandaki konumunu (CSS üzerinden) dinamik hesapla
+    const overlay = document.querySelector('.overlay');
+    const rect = overlay.getBoundingClientRect();
+    const videoRect = video.getBoundingClientRect();
 
-    async function captureAndProcess() {
-        const ctx = canvas.getContext('2d');
-        
-        // Sadece çerçeve içindeki alanı yakala (Koordinatları manuel ayarla)
-        // videoWidth ve videoHeight üzerinden oranlama yapıyoruz
-        ctx.drawImage(video, 120, 190, 400, 100, 0, 0, 400, 100);
+    const startX = (rect.left - videoRect.left) * scaleX;
+    const startY = (rect.top - videoRect.top) * scaleY;
+    const width = rect.width * scaleX;
+    const height = rect.height * scaleY;
 
-        const status = document.getElementById('result');
-        status.innerText = "İşleniyor...";
+    // Canvas'a çiz (Bu aşamada canvas'ı display:block yapıp neyi kestiğini gör!)
+    ctx.drawImage(video, startX, startY, width, height, 0, 0, 400, 100);
 
-        // Tesseract'ı sadece bu küçük alan için çalıştır
-        const worker = await Tesseract.createWorker('eng');
-        await worker.setParameters({
-            tessedit_char_whitelist: '0123456789', // Sadece rakam
-            tessedit_pageseg_mode: '7'             // Tek satır modu
-        });
-
-        const { data: { text } } = await worker.recognize(canvas);
-        status.innerText = "Sonuç: " + text.replace(/[^0-9]/g, "");
-
-        await worker.terminate();
+    // 2. Görüntü İyileştirme: Gri tonlama ve Renkleri Ters Çevir (Invert)
+    let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        let avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        // Invert: 255 - değer (Beyazı siyah, siyahı beyaz yap)
+        let inverted = 255 - avg; 
+        data[i] = data[i+1] = data[i+2] = (inverted > 128) ? 255 : 0; // Eşikleme (Binarize)
     }
-</script>
-</body>
-</html>
+    ctx.putImageData(imageData, 0, 0);
+
+    // 3. Tesseract Analizi
+    const status = document.getElementById('result');
+    status.innerText = "Analiz ediliyor...";
+
+    const worker = await Tesseract.createWorker('eng');
+    await worker.setParameters({
+        tessedit_char_whitelist: '0123456789.', 
+        tessedit_pageseg_mode: '7'
+    });
+
+    const { data: { text } } = await worker.recognize(canvas);
+    status.innerText = "Sonuç: " + (text.trim() || "Okunamadı");
+
+    await worker.terminate();
+}
