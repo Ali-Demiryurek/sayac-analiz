@@ -2,61 +2,81 @@
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <title>Gelişmiş Sayaç OCR</title>
+    <title>Gelişmiş Sayaç Analizi</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
 </head>
-<body style="background: #121212; color: white; font-family: sans-serif; text-align: center;">
+<body style="background: #121212; color: #00ff00; font-family: 'Courier New', monospace; text-align: center;">
 
-    <h2>Sayaç Analiz Sistemi</h2>
+    <h2 style="color: white;">SAYAÇ ANALİZ TERMİNALİ</h2>
     
-    <div style="margin: 20px;">
-        <input type="file" id="imageInput" accept="image/*" capture="camera" style="display: none;">
-        <button onclick="document.getElementById('imageInput').click()" 
-                style="padding: 15px 30px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">
-            FOTOĞRAF ÇEK / YÜKLE
-        </button>
+    <div style="margin: 20px; border: 2px dashed #333; padding: 20px;">
+        <input type="file" id="imageInput" accept="image/*" capture="camera">
+        <p style="font-size: 12px; color: #888;">Not: Sadece rakamlara odaklanılır.</p>
     </div>
 
-    <canvas id="processCanvas" style="display:none;"></canvas>
-    <img id="preview" style="max-width: 90%; border: 2px solid #555; display: none;">
-
-    <div id="status" style="margin-top: 20px; color: #ffc107;">Sistem Hazır...</div>
+    <canvas id="canvasOutput" style="max-width: 100%; border: 1px solid #00ff00; margin-bottom: 10px;"></canvas>
     
-    <div id="result" style="font-size: 24px; margin-top: 20px; font-weight: bold; color: #00ff00;"></div>
+    <div id="status" style="color: #ffc107; margin-bottom: 10px;">OpenCV Yükleniyor...</div>
+    <div id="result" style="font-size: 32px; background: #000; padding: 10px; border-radius: 5px;">---</div>
 
     <script>
+        function onOpenCvReady() {
+            document.getElementById('status').innerText = "Sistem Hazır. Fotoğrafı Yükle.";
+        }
+
         const imageInput = document.getElementById('imageInput');
-        const status = document.getElementById('status');
-        const resultDiv = document.getElementById('result');
+        const canvas = document.getElementById('canvasOutput');
 
         imageInput.onchange = async (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
-            status.innerText = "Görüntü işleniyor (Gürültü azaltılıyor)...";
-            
-            // Tesseract'ı başlat
-            const worker = await Tesseract.createWorker('eng'); // Sayısal veriler için 'eng' yeterli
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            img.onload = async () => {
+                const ctx = canvas.getContext('2d');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
 
-            // Filtreleme ve Tanıma İşlemi
-            try {
-                const { data: { text } } = await worker.recognize(file, {
-                    // Sadece rakamları ve noktayı tanıması için kısıtlıyoruz (Beyaz Liste)
-                    tessedit_char_whitelist: '0123456789.T'
+                // --- GÖRÜNTÜ İŞLEME (Preprocessing) ---
+                let src = cv.imread(canvas);
+                let dst = new cv.Mat();
+                
+                // 1. Gri Tonlamaya Çevir
+                cv.cvtColor(src, src, cv.COLOR_RGBA2GRAY, 0);
+                
+                // 2. Kontrastı Artır ve Gürültüyü Sil (Thresholding)
+                // Bu adım, yansımaları silip rakamları siyah-beyaz yapar
+                cv.threshold(src, dst, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+                
+                // İşlenmiş görüntüyü canvas'a bas
+                cv.imshow('canvasOutput', dst);
+
+                // --- TESSERACT ANALİZİ ---
+                document.getElementById('status').innerText = "Rakamlar ayıklanıyor...";
+                
+                const worker = await Tesseract.createWorker('eng');
+                
+                // Kritik Parametreler: Sadece rakam, nokta ve virgül
+                await worker.setParameters({
+                    tessedit_char_whitelist: '0123456789.,',
+                    tessedit_pageseg_mode: '6', // Bloğu tek bir metin satırı olarak gör
                 });
 
-                // Regex ile 5.8.0 veya benzeri formatları ayıkla
-                const cleanedText = text.replace(/\s/g, '');
-                status.innerText = "İşlem Tamamlandı!";
-                resultDiv.innerText = "Okunan Değer: " + (cleanedText || "Anlaşılamadı");
+                const { data: { text } } = await worker.recognize(canvas);
                 
-                console.log("Ham Veri:", text);
-            } catch (err) {
-                status.innerText = "Hata oluştu!";
-                console.error(err);
-            }
+                // Sadece rakamları tutan Regex temizliği
+                const numericOnly = text.replace(/[^0-9.]/g, '');
+                
+                document.getElementById('status').innerText = "Tamamlandı!";
+                document.getElementById('result').innerText = numericOnly || "Okunamadı!";
 
-            await worker.terminate();
+                // Hafızayı temizle
+                src.delete(); dst.delete();
+                await worker.terminate();
+            };
         };
     </script>
 </body>
