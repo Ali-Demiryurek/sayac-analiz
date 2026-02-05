@@ -1,74 +1,54 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Kesin Çözüm: Sayaç OCR</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 </head>
-<body style="background: #000; color: #0f0; font-family: monospace; text-align: center;">
+<body style="background:#1a1a1a; color:#0f0; text-align:center; font-family:monospace;">
 
-    <h2>SAYAÇ ANALİZİ v3.0</h2>
-    <input type="file" id="imageInput" accept="image/*" style="margin: 20px;">
-    
-    <div style="display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
-        <div>
-            <p>1. Orijinal İşlenmiş</p>
-            <canvas id="canvasPre" style="border: 1px solid #555; max-width: 400px;"></canvas>
-        </div>
-    </div>
-
-    <div id="result" style="font-size: 40px; margin-top: 20px; border: 2px solid #0f0; display: inline-block; padding: 10px;">
-        BEKLENİYOR...
-    </div>
+    <h3>7-SEGMENT DİJİTAL OKUYUCU v4</h3>
+    <input type="file" id="imageInput" accept="image/*" capture="camera">
+    <br><br>
+    <canvas id="outputCanvas" style="border:1px solid #0f0; max-width:100%;"></canvas>
+    <h1 id="result">OKUNUYOR...</h1>
 
     <script>
         const imageInput = document.getElementById('imageInput');
+        const canvas = document.getElementById('outputCanvas');
 
         imageInput.onchange = async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
             const img = new Image();
-            img.src = URL.createObjectURL(file);
+            img.src = URL.createObjectURL(e.target.files[0]);
             img.onload = async () => {
                 let src = cv.imread(img);
-                let gray = new cv.Mat();
-                
-                // 1. Gri tonlama
-                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-                
-                // 2. Gürültü engelleme (Gaussian Blur)
-                let ksize = new cv.Size(5, 5);
-                cv.GaussianBlur(gray, gray, ksize, 0, 0, cv.BORDER_DEFAULT);
+                let dst = new cv.Mat();
 
-                // 3. ADAPTIVE THRESHOLD (En kritik nokta)
-                // Bu işlem yansımaları siler, sadece rakamları bırakır
-                cv.adaptiveThreshold(gray, gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
+                // 1. GRİ TONLAMA VE KONTRAST
+                cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY, 0);
 
-                // 4. Invert (Rakamları siyah, arka planı beyaz yap - Tesseract beyazda siyah sever)
-                cv.bitwise_not(gray, gray);
+                // 2. MORFOLOJİK KAPATMA (MORPH_CLOSE)
+                // Bu işlem 7 segmentli rakamların arasındaki boşlukları yamalar, 
+                // böylece Tesseract onları parçalı çizgiler değil, bütün bir rakam olarak görür.
+                let ksize = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+                cv.morphologyEx(dst, dst, cv.MORPH_CLOSE, ksize);
 
-                cv.imshow('canvasPre', gray);
+                // 3. EŞİKLEME (Otsu Threshold)
+                cv.threshold(dst, dst, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
 
+                cv.imshow('outputCanvas', dst);
+
+                // TESSERACT'I 7-SEGMENT İÇİN ZORLA
                 const worker = await Tesseract.createWorker('eng');
-                
-                // Ayarları katılaştırıyoruz
                 await worker.setParameters({
-                    tessedit_char_whitelist: '0123456789.', // HARF GİRİŞİ YASAK
-                    tessedit_pageseg_mode: '7',            // Tek bir kelime/sayı satırı gibi gör
-                    tessjs_create_hocr: '0',
-                    tessjs_create_tsv: '0'
+                    tessedit_char_whitelist: '0123456789', // Harf okumayı tamamen kapatır
+                    tessedit_pageseg_mode: '7',           // Görüntüyü tek bir kelime/sayı olarak ele al
+                    tessedit_ocr_engine_mode: '1'         // Sadece LSTM (Modern) motoru kullan
                 });
 
-                const { data: { text } } = await worker.recognize(document.getElementById('canvasPre'));
-                
-                // Sadece sayısal karakterleri nihai olarak temizle
-                const finalResult = text.trim().replace(/[^0-9.]/g, '');
-                
-                document.getElementById('result').innerText = finalResult || "HATA: TEKRAR ÇEK";
+                const { data: { text } } = await worker.recognize(canvas);
+                document.getElementById('result').innerText = text.replace(/[^0-9]/g, "");
 
-                src.delete(); gray.delete();
+                src.delete(); dst.delete(); ksize.delete();
                 await worker.terminate();
             };
         };
