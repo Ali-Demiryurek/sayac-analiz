@@ -1,48 +1,97 @@
-async function captureAndProcess() {
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('cropCanvas'); // 400x100 boyutunda olsun
-    const ctx = canvas.getContext('2d');
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sayaç Analiz Terminali</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        body { background: #121212; color: #00ff00; font-family: monospace; text-align: center; }
+        .camera-container { position: relative; width: 100%; max-width: 500px; margin: auto; overflow: hidden; }
+        video { width: 100%; border: 2px solid #333; }
+        .overlay {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%; height: 60px;
+            border: 2px solid #ff0000;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+            pointer-events: none;
+        }
+        canvas { display: block; margin: 10px auto; border: 1px solid #555; background: #000; }
+        button { padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
 
-    // 1. Dinamik Kırpma: Videonun tam ortasından çerçeve boyutunda bir alan al
-    const scaleX = video.videoWidth / video.clientWidth;
-    const scaleY = video.videoHeight / video.clientHeight;
+    <h2>SAYAÇ OKUMA SİSTEMİ</h2>
     
-    // Çerçevenin ekrandaki konumunu (CSS üzerinden) dinamik hesapla
-    const overlay = document.querySelector('.overlay');
-    const rect = overlay.getBoundingClientRect();
-    const videoRect = video.getBoundingClientRect();
+    <div class="camera-container">
+        <video id="video" autoplay playsinline></video>
+        <div class="overlay"></div>
+    </div>
 
-    const startX = (rect.left - videoRect.left) * scaleX;
-    const startY = (rect.top - videoRect.top) * scaleY;
-    const width = rect.width * scaleX;
-    const height = rect.height * scaleY;
+    <br>
+    <button onclick="captureAndProcess()">FOTOĞRAF ÇEK VE ANALİZ ET</button>
+    
+    <p>Kırpılan Bölge (İşlenen):</p>
+    <canvas id="cropCanvas" width="400" height="100"></canvas>
+    
+    <div id="result" style="font-size: 24px; margin-top: 20px;">Sonuç Bekleniyor...</div>
 
-    // Canvas'a çiz (Bu aşamada canvas'ı display:block yapıp neyi kestiğini gör!)
-    ctx.drawImage(video, startX, startY, width, height, 0, 0, 400, 100);
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('cropCanvas');
+        const resultDiv = document.getElementById('result');
 
-    // 2. Görüntü İyileştirme: Gri tonlama ve Renkleri Ters Çevir (Invert)
-    let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    let data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-        let avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        // Invert: 255 - değer (Beyazı siyah, siyahı beyaz yap)
-        let inverted = 255 - avg; 
-        data[i] = data[i+1] = data[i+2] = (inverted > 128) ? 255 : 0; // Eşikleme (Binarize)
-    }
-    ctx.putImageData(imageData, 0, 0);
+        // Kamerayı başlat
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+            .then(stream => { video.srcObject = stream; })
+            .catch(err => { alert("Kamera açılmadı: " + err); });
 
-    // 3. Tesseract Analizi
-    const status = document.getElementById('result');
-    status.innerText = "Analiz ediliyor...";
+        async function captureAndProcess() {
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            
+            // Video boyutlarını al
+            const vW = video.videoWidth;
+            const vH = video.videoHeight;
+            
+            // Çerçevenin konumunu oranla (Orta bölgeyi alıyoruz)
+            const cropW = vW * 0.8;
+            const cropH = vH * 0.2;
+            const startX = (vW - cropW) / 2;
+            const startY = (vH - cropH) / 2;
 
-    const worker = await Tesseract.createWorker('eng');
-    await worker.setParameters({
-        tessedit_char_whitelist: '0123456789.', 
-        tessedit_pageseg_mode: '7'
-    });
+            // Canvas'a çiz
+            ctx.drawImage(video, startX, startY, cropW, cropH, 0, 0, 400, 100);
 
-    const { data: { text } } = await worker.recognize(canvas);
-    status.innerText = "Sonuç: " + (text.trim() || "Okunamadı");
+            // Görüntü İşleme: Siyah-Beyaz ve Keskinleştirme
+            let imgData = ctx.getImageData(0, 0, 400, 100);
+            let d = imgData.data;
+            for (let i = 0; i < d.length; i += 4) {
+                let r = d[i], g = d[i+1], b = d[i+2];
+                let gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                // Eşikleme (Threshold): Rakamlar koyu, zemin açık olmalı
+                let v = (gray > 100) ? 255 : 0; 
+                d[i] = d[i+1] = d[i+2] = v;
+            }
+            ctx.putImageData(imgData, 0, 0);
 
-    await worker.terminate();
-}
+            resultDiv.innerText = "OCR Başlıyor...";
+
+            // Tesseract Çalıştır
+            try {
+                const worker = await Tesseract.createWorker('eng');
+                await worker.setParameters({
+                    tessedit_char_whitelist: '0123456789.',
+                    tessedit_pageseg_mode: '7'
+                });
+                const { data: { text } } = await worker.recognize(canvas);
+                resultDiv.innerText = "Okunan Değer: " + text.replace(/[^0-9.]/g, "");
+                await worker.terminate();
+            } catch (e) {
+                resultDiv.innerText = "Hata: " + e;
+            }
+        }
+    </script>
+</body>
+</html>
