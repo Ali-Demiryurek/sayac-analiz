@@ -3,19 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Akıllı Sayaç Analiz 10</title>
+    <title>Sayaç Okuyucu v3 (HD)</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         body { background: #121212; color: #00ff00; font-family: 'Courier New', monospace; text-align: center; padding: 10px; }
         .camera-wrapper { position: relative; display: inline-block; width: 100%; max-width: 480px; }
         video { width: 100%; border: 2px solid #333; border-radius: 8px; }
         
-        /* Çerçeveyi biraz büyüttük ki alttaki 5.8.0 da girsin */
+        /* Çerçeve Ayarları */
         .overlay-box {
             position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            width: 85%; height: 35%; 
-            border: 3px solid #ff0000;
+            width: 90%; height: 35%; /* Genişlik ve Yükseklik */
+            border: 2px solid #ff0000;
             box-shadow: 0 0 0 100vw rgba(0, 0, 0, 0.85);
             z-index: 10;
         }
@@ -23,10 +23,12 @@
         .controls { background: #222; padding: 15px; margin-top: 10px; border-radius: 8px; border: 1px solid #444; }
         input[type=range] { width: 100%; margin: 10px 0; accent-color: #28a745; }
         
+        /* Canvas artık daha büyük işliyor ama ekranda sığsın diye küçültüyoruz */
         canvas { 
             border: 2px solid #00ff00; 
             background: #fff; 
-            width: 90%; 
+            width: 100%; 
+            max-width: 400px;
             height: auto; 
             margin-top: 10px; 
             image-rendering: pixelated; 
@@ -46,15 +48,16 @@
             margin-top: 20px;
             text-align: left;
         }
-        .result-item { background: #333; padding: 15px; border-radius: 5px; border: 1px solid #555; }
-        .label { font-size: 12px; color: #aaa; display: block; margin-bottom: 5px; }
-        .value { font-size: 20px; font-weight: bold; color: #fff; }
-        .highlight { color: #ffff00; }
+        .result-item { background: #333; padding: 10px; border-radius: 5px; border: 1px solid #555; }
+        .label { font-size: 11px; color: #aaa; display: block; margin-bottom: 5px; text-transform: uppercase; }
+        .value { font-size: 18px; font-weight: bold; color: #fff; word-break: break-all; }
+        
+        #rawResult { font-size: 10px; color: #555; margin-top: 10px; border-top: 1px solid #333; padding-top: 5px; }
     </style>
 </head>
 <body>
 
-    <h3>OBIS VE ENDEKS OKUYUCU</h3>
+    <h3>SAYAÇ OKUYUCU (HD MOD)</h3>
 
     <div class="camera-wrapper">
         <video id="video" autoplay playsinline></video>
@@ -62,39 +65,46 @@
     </div>
 
     <div class="controls">
-        <label>EŞİK AYARI: <span id="valDisplay" style="color:white">90</span></label>
-        <input type="range" id="thresholdSlider" min="0" max="255" value="90">
+        <label>EŞİK AYARI: <span id="valDisplay" style="color:white">100</span></label>
+        <input type="range" id="thresholdSlider" min="0" max="255" value="100">
         
-        <label style="display:block; margin-top:10px;">
-            <input type="checkbox" id="thickCheck" checked> Kalınlaştır (Rakamları Birleştir)
-        </label>
+        <div style="display:flex; justify-content:space-around; margin-top:10px;">
+            <label><input type="checkbox" id="thickCheck"> Kalınlaştır (Dene)</label>
+            <label><input type="checkbox" id="invertCheck"> Ters Renk</label>
+        </div>
         
-        <p style="margin-bottom:5px; color:#ccc;">Netlik Önizlemesi:</p>
+        <p style="margin-bottom:5px; color:#ccc; font-size:12px;">Önizleme (Net ve Ayrık Rakamlar Olmalı):</p>
         <canvas id="previewCanvas"></canvas>
         
-        <button onclick="runOCR()">TARA VE AYRIŞTIR</button>
+        <button onclick="runOCR()">TARA</button>
     </div>
 
     <div class="result-grid">
         <div class="result-item">
-            <span class="label">OBIS KODU (Ne Okundu?)</span>
-            <div id="obisResult" class="value highlight">---</div>
+            <span class="label">OBIS KODU</span>
+            <div id="obisResult" class="value" style="color: yellow;">---</div>
         </div>
         <div class="result-item">
             <span class="label">ENDEKS DEĞERİ</span>
             <div id="valueResult" class="value">---</div>
         </div>
     </div>
-    <div style="font-size: 12px; color: #666; margin-top: 10px;">Ham Veri: <span id="rawResult">...</span></div>
+    <div id="rawResult">Ham Veri Bekleniyor...</div>
 
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('previewCanvas');
+        // willReadFrequently performans artırır
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        
         const slider = document.getElementById('thresholdSlider');
         const valDisplay = document.getElementById('valDisplay');
         const thickCheck = document.getElementById('thickCheck');
+        const invertCheck = document.getElementById('invertCheck');
         
+        // Çözünürlük Çarpanı (HD Modu için 2x yapıyoruz)
+        const SCALE_FACTOR = 2; 
+
         navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then(stream => {
             video.srcObject = stream;
             requestAnimationFrame(processLoop);
@@ -104,48 +114,57 @@
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
                 const vw = video.videoWidth;
                 const vh = video.videoHeight;
-                // Çerçeveyi biraz daha genişlettik (Height: 0.35) ki alt satırdaki kod sığsın
-                const cropW = vw * 0.85; 
+                
+                // Kırpma alanı (%90 Genişlik, %35 Yükseklik)
+                const cropW = vw * 0.90;
                 const cropH = vh * 0.35;
                 const cropX = (vw - cropW) / 2;
                 const cropY = (vh - cropH) / 2;
 
-                canvas.width = cropW;
-                canvas.height = cropH;
+                // Canvas boyutunu 2 katına çıkar (HD İşleme)
+                canvas.width = cropW * SCALE_FACTOR;
+                canvas.height = cropH * SCALE_FACTOR;
 
-                ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                // Görüntüyü büyütüp çiz
+                ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
 
-                let frame = ctx.getImageData(0, 0, cropW, cropH);
+                let frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 let data = frame.data;
                 let thresh = parseInt(slider.value);
                 
                 for (let i = 0; i < data.length; i += 4) {
                     let avg = (data[i] + data[i+1] + data[i+2]) / 3;
+                    
+                    // Ters Renk Seçeneği
+                    if(invertCheck.checked) avg = 255 - avg;
+
+                    // Eşikleme (Threshold)
                     let c = (avg < thresh) ? 0 : 255;
                     data[i] = data[i+1] = data[i+2] = c;
                 }
 
-                if (thickCheck.checked) dilate(data, cropW, cropH);
+                // Kalınlaştırma (Daha hafif bir algoritma)
+                if (thickCheck.checked) dilateLight(data, canvas.width, canvas.height);
+
                 ctx.putImageData(frame, 0, 0);
             }
             requestAnimationFrame(processLoop);
         }
 
-        function dilate(data, w, h) {
+        // Hafif Kalınlaştırma (Sadece sağ ve alt komşuya yayar, boğmaz)
+        function dilateLight(data, w, h) {
             let copy = new Uint8ClampedArray(data);
-            for (let y = 1; y < h - 1; y++) {
-                for (let x = 1; x < w - 1; x++) {
-                    let idx = (y * w + x) * 4;
-                    if (copy[idx] === 0) { 
-                        makeBlack(data, idx - 4);       
-                        makeBlack(data, idx + 4);       
-                        makeBlack(data, idx - (w * 4)); 
-                        makeBlack(data, idx + (w * 4)); 
-                    }
+            for (let i = 0; i < data.length; i += 4) {
+                if (copy[i] === 0) { // Siyah piksel
+                    // Sadece sağı ve altı boya (Çaprazları boşver)
+                    let right = i + 4;
+                    let down = i + (w * 4);
+                    if (right < data.length) { data[right] = 0; data[right+1]=0; data[right+2]=0; }
+                    if (down < data.length) { data[down] = 0; data[down+1]=0; data[down+2]=0; }
                 }
             }
         }
-        function makeBlack(d, i) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; }
+
         slider.oninput = function() { valDisplay.innerText = this.value; }
 
         async function runOCR() {
@@ -153,45 +172,53 @@
             const obisEl = document.getElementById('obisResult');
             const valEl = document.getElementById('valueResult');
             
-            obisEl.innerText = "...";
+            obisEl.innerText = "Analiz...";
             valEl.innerText = "...";
 
             const worker = await Tesseract.createWorker('eng');
             await worker.setParameters({
-                tessedit_char_whitelist: '0123456789.T', // T harfini de ekledik (T1 gibi kodlar için)
-                tessedit_pageseg_mode: '6', // Blok Metin Modu (Çok satırlı okuma için şart)
-                preserve_interword_spaces: '1'
+                tessedit_char_whitelist: '0123456789. ', // Boşluk da ekledik ki rakamlar yapışmasın
+                tessedit_pageseg_mode: '6', // Blok Modu
             });
             
             const { data: { text } } = await worker.recognize(canvas);
-            rawEl.innerText = text.replace(/\n/g, " | ");
+            rawEl.innerText = "Ham: " + text.replace(/\n/g, " | ");
             
-            // --- AYRIŞTIRMA MANTIĞI ---
-            // 1. Satırlara böl
-            const lines = text.split(/\n/);
+            // --- AKILLI AYRIŞTIRMA ---
+            let lines = text.split(/\n/);
             let foundObis = "Bulunamadı";
             let foundValue = "Bulunamadı";
 
-            // Regex Tanımları
-            // OBIS Formatı: 1.8.0, 5.8.0, 8.8.0 vb. (X.X.X)
-            const obisRegex = /\b[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,2}\b/;
-            // Değer Formatı: Noktalı büyük sayı (Örn: 000663.484)
-            const valueRegex = /\b[0-9]{4,8}\.[0-9]{1,4}\b/;
+            // Regexler (Esnek)
+            // OBIS: 1.8.0 veya 180 veya 5.8.0 gibi
+            const obisRegexStrict = /\b\d\.\d\.\d\b/; 
+            const obisRegexLoose = /\b(180|580|880)\b/; // Noktalar çıkmazsa diye
+
+            // Değer: Uzun sayı (En az 5 hane)
+            const valueRegex = /\b\d{4,9}(\.\d{1,4})?\b/;
 
             lines.forEach(line => {
-                // Temizlik
-                let cleanLine = line.trim();
+                let clean = line.trim().replace(/[^0-9. ]/g, ""); // Sadece rakam, nokta, boşluk
                 
-                // OBIS Ara
-                let obisMatch = cleanLine.match(obisRegex);
-                if (obisMatch) foundObis = obisMatch[0];
+                // 1. Önce OBIS Ara
+                let obisMatch = clean.match(obisRegexStrict);
+                if (!obisMatch) obisMatch = clean.match(obisRegexLoose); // Noktasız dene
 
-                // Değer Ara (OBIS kodu olmayan ama sayı formatına uyan)
-                let valMatch = cleanLine.match(valueRegex);
+                if (obisMatch) {
+                    foundObis = obisMatch[0];
+                    // Eğer noktasız yakaladıysak (örn 180), formatla (1.8.0)
+                    if(!foundObis.includes(".")) {
+                        foundObis = foundObis.split("").join(".");
+                    }
+                }
+
+                // 2. Değer Ara (OBIS kodu olmayan uzun sayı)
+                let valMatch = clean.match(valueRegex);
                 if (valMatch) {
-                    // Eğer bulduğumuz şey OBIS formatına benzemiyorsa, o değerdir.
-                    if (!valMatch[0].match(obisRegex)) {
-                        foundValue = valMatch[0];
+                    let v = valMatch[0];
+                    // OBIS kodu ile karıştırma
+                    if (!v.match(obisRegexStrict) && !v.match(obisRegexLoose) && v.replace('.','').length > 4) {
+                        foundValue = v;
                     }
                 }
             });
@@ -199,12 +226,8 @@
             obisEl.innerText = foundObis;
             valEl.innerText = foundValue;
 
-            // Görsel Renklendirme
             if(foundObis !== "Bulunamadı") obisEl.style.color = "#00ff00";
-            else obisEl.style.color = "red";
-            
             if(foundValue !== "Bulunamadı") valEl.style.color = "#00ff00";
-            else valEl.style.color = "red";
 
             await worker.terminate();
         }
