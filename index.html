@@ -2,56 +2,62 @@
 <html>
 <head>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-    <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+    <style>
+        .camera-container { position: relative; width: 640px; height: 480px; margin: auto; }
+        #video { width: 100%; height: 100%; background: #000; }
+        /* Okuma Çerçevesi */
+        .overlay {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px; height: 100px;
+            border: 3px solid #00ff00;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); /* Çerçeve dışını karart */
+            pointer-events: none;
+        }
+    </style>
 </head>
-<body style="background:#1a1a1a; color:#0f0; text-align:center; font-family:monospace;">
+<body>
 
-    <h3>7-SEGMENT DİJİTAL OKUYUCU v4</h3>
-    <input type="file" id="imageInput" accept="image/*" capture="camera">
-    <br><br>
-    <canvas id="outputCanvas" style="border:1px solid #0f0; max-width:100%;"></canvas>
-    <h1 id="result">OKUNUYOR...</h1>
+<div class="camera-container">
+    <video id="video" autoplay playsinline></video>
+    <div class="overlay"></div>
+</div>
 
-    <script>
-        const imageInput = document.getElementById('imageInput');
-        const canvas = document.getElementById('outputCanvas');
+<button onclick="captureAndProcess()" style="display:block; margin:20px auto; padding:15px 30px; font-size:20px;">FOTOĞRAF ÇEK VE OKU</button>
 
-        imageInput.onchange = async (e) => {
-            const img = new Image();
-            img.src = URL.createObjectURL(e.target.files[0]);
-            img.onload = async () => {
-                let src = cv.imread(img);
-                let dst = new cv.Mat();
+<canvas id="cropCanvas" width="400" height="100" style="display:none;"></canvas>
+<h2 id="result" style="text-align:center; color:#00ff00;">Sonuç: ---</h2>
 
-                // 1. GRİ TONLAMA VE KONTRAST
-                cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY, 0);
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('cropCanvas');
 
-                // 2. MORFOLOJİK KAPATMA (MORPH_CLOSE)
-                // Bu işlem 7 segmentli rakamların arasındaki boşlukları yamalar, 
-                // böylece Tesseract onları parçalı çizgiler değil, bütün bir rakam olarak görür.
-                let ksize = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-                cv.morphologyEx(dst, dst, cv.MORPH_CLOSE, ksize);
+    // Kamerayı Başlat
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+        .then(stream => video.srcObject = stream);
 
-                // 3. EŞİKLEME (Otsu Threshold)
-                cv.threshold(dst, dst, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
+    async function captureAndProcess() {
+        const ctx = canvas.getContext('2d');
+        
+        // Sadece çerçeve içindeki alanı yakala (Koordinatları manuel ayarla)
+        // videoWidth ve videoHeight üzerinden oranlama yapıyoruz
+        ctx.drawImage(video, 120, 190, 400, 100, 0, 0, 400, 100);
 
-                cv.imshow('outputCanvas', dst);
+        const status = document.getElementById('result');
+        status.innerText = "İşleniyor...";
 
-                // TESSERACT'I 7-SEGMENT İÇİN ZORLA
-                const worker = await Tesseract.createWorker('eng');
-                await worker.setParameters({
-                    tessedit_char_whitelist: '0123456789', // Harf okumayı tamamen kapatır
-                    tessedit_pageseg_mode: '7',           // Görüntüyü tek bir kelime/sayı olarak ele al
-                    tessedit_ocr_engine_mode: '1'         // Sadece LSTM (Modern) motoru kullan
-                });
+        // Tesseract'ı sadece bu küçük alan için çalıştır
+        const worker = await Tesseract.createWorker('eng');
+        await worker.setParameters({
+            tessedit_char_whitelist: '0123456789', // Sadece rakam
+            tessedit_pageseg_mode: '7'             // Tek satır modu
+        });
 
-                const { data: { text } } = await worker.recognize(canvas);
-                document.getElementById('result').innerText = text.replace(/[^0-9]/g, "");
+        const { data: { text } } = await worker.recognize(canvas);
+        status.innerText = "Sonuç: " + text.replace(/[^0-9]/g, "");
 
-                src.delete(); dst.delete(); ksize.delete();
-                await worker.terminate();
-            };
-        };
-    </script>
+        await worker.terminate();
+    }
+</script>
 </body>
 </html>
